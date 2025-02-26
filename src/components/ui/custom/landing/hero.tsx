@@ -16,6 +16,7 @@ import { Vector3, Group, Mesh, Clock, BufferAttribute } from "three"
 import axios from "axios"
 import { useRouter } from "next/navigation"
 import CountUp from 'react-countup';
+import { Contributors } from "@/components/ui/custom/landing/contributors";
 
 interface FrameState {
   clock: Clock
@@ -336,6 +337,9 @@ export function LandingHero() {
       <div className="absolute inset-0">
         <Scene />
       </div>
+
+      {/* Add Contributors component */}
+      <Contributors />
 
       {/* Gradient overlay */}
       <div className="absolute inset-0 z-10 bg-gradient-to-b from-background/0 via-background/60 to-background" />
