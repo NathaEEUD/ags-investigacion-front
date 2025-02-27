@@ -19,3 +19,29 @@ export type SuccessResponse = {
   errorType: string | null;
   errorCode: string | null;
 } 
+
+export type ResearcherDetails = {
+  name: string;
+  email: string;
+  avatarUrl: string;
+  agentName: string;
+  agentDescription: string;
+  agentCategory: string;
+  agentIndustry: string;
+  primaryResearches: {
+    assignmentId: string;
+    agentName: string;
+    agentDescription: string;
+    agentCategory: string;
+    agentIndustry: string;
+    status: string;
+  }[];
+  contributorsResearches: {
+    assignmentId: string;
+    name: string;
+    shortDescription: string;
+    category: string;
+    industry: string;
+    status: string;
+  }[];
+};

@@ -5,21 +5,19 @@ import { useAuth } from "@/hooks/use-auth";
 import { useApi } from "@/hooks/use-api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import Loader from "@/components/ui/custom/shared/loader";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlayCircle, Upload } from "lucide-react";
-import ReactMarkdown from 'react-markdown';
-import '@/styles/github-markdown.css';
-import { AlertCircle, CheckCircle, Pen } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import "@/styles/github-markdown.css";
+import { AlertCircle } from "lucide-react";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
 import Image from "next/image";
-import {motion, AnimatePresence} from 'framer-motion';
-import { fadeSlideVariants, iconVariants } from "@/styles/animations";
+import { motion, AnimatePresence } from "framer-motion";
+import { fadeSlideVariants } from "@/styles/animations";
 import { useSidebar } from "@/components/ui/sidebar";
 import { FinishDocumentationModal } from "@/components/finish-documentation-modal";
 import {
@@ -28,34 +26,16 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import Link from "next/link";
+} from "@/components/ui/select";
+import { generateMarkdown, processFiles } from "@/lib/proccessingFiles";
+import { EditorToolbar } from "@/components/agent/ToolbarEditor";
+import { DragDropArea } from "@/components/agent/DragDropArea";
+import { ProgressIndicator } from "@/components/agent/ProgressIndicator";
+import { LoadingState, NoActiveResearchState, NotResearcherState } from "@/components/agent/AgentStates";
+import { ResearcherDetails } from "@/types/researcher";
 
-type ResearcherDetails = {
-  name: string;
-  email: string;
-  avatarUrl: string;
-  agentName: string;
-  agentDescription: string;
-  agentCategory: string;
-  agentIndustry: string;
-  primaryResearches: {
-    assignmentId: string;
-    agentName: string;
-    agentDescription: string;
-    agentCategory: string;
-    agentIndustry: string;
-    status: string;
-  }[];
-  contributorsResearches: {
-    assignmentId: string;
-    name: string;
-    shortDescription: string;
-    category: string;
-    industry: string;
-    status: string;
-  }[];
-};
+
+
 
 const markdownExample = `# Título del Documento
 
@@ -87,9 +67,9 @@ type StartedMessage = {
   type: "research_start";
   message: string;
   data: {
-    status: 'started';
-  }
-}
+    status: "started";
+  };
+};
 
 type ProgressMessage = {
   type: "research_progress";
@@ -126,62 +106,8 @@ type WebSocketMessage =
   | ErrorMessage
   | CompilerProgressMessage;
 
-interface ProgressIndicatorProps {
-  progress: number;
-  currentPhase: string;
-}
 
-// Agregar componente de progreso
-const ProgressIndicator: React.FC<ProgressIndicatorProps> = (
-  { progress, currentPhase }
-) => (
-  <div className="flex items-center justify-center gap-2">
-    <div className="flex items-center gap-1">
-      <AnimatePresence mode="wait">
-        {progress < 100 ? (
-          currentPhase.includes("Escribiendo") ? (
-            <motion.div
-              key="pen"
-              variants={iconVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              transition={{ duration: 0.2 }}
-            >
-              <Pen className="w-4 h-4 animate-pulse" />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="loader"
-              variants={iconVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              transition={{ duration: 0.2 }}
-            >
-              <Loader size="xxs" mode="light" />
-            </motion.div>
-          )
-        ) : (
-          <motion.div
-            key="check"
-            variants={iconVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={{ duration: 0.2 }}
-          >
-            <CheckCircle className="w-4 h-4 text-green-500" />
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <span className="text-sm font-medium md:truncate md:overflow-hidden md:whitespace-nowrap md:max-w-[350px] inline-block">
-        {currentPhase}
-      </span>
-    </div>
-    <span className="text-sm text-muted-foreground">{Math.round(progress)}%</span>
-  </div>
-);
+
 
 export default function AgenteInvestigadorPage() {
   const { profile } = useAuth();
@@ -200,17 +126,33 @@ export default function AgenteInvestigadorPage() {
   const [streamingContent, setStreamingContent] = useState("");
   const [isGenerationComplete, setIsGenerationComplete] = useState(false);
   const phases = {
-    research: ["Iniciando investigación", "Recuperando datos previos", "Generando consultas", "Realizando búsqueda", "Procesando resultados"],
-    writing: ["Preparando contenido", "Generando secciones", "Finalizando documento"]
+    research: [
+      "Iniciando investigación",
+      "Recuperando datos previos",
+      "Generando consultas",
+      "Realizando búsqueda",
+      "Procesando resultados",
+    ],
+    writing: [
+      "Preparando contenido",
+      "Generando secciones",
+      "Finalizando documento",
+    ],
   };
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
-  const activeResearches = useMemo(() => ({
-    primary: details?.primaryResearches.filter(r => r.status === 'active') || [],
-    contributor: details?.contributorsResearches.filter(r => r.status === 'active') || []
-  }), [details]);
+  const activeResearches = useMemo(
+    () => ({
+      primary:
+        details?.primaryResearches.filter((r) => r.status === "active") || [],
+      contributor:
+        details?.contributorsResearches.filter((r) => r.status === "active") ||
+        [],
+    }),
+    [details]
+  );
 
   useEffect(() => {
     if (profile?.email) {
@@ -228,9 +170,10 @@ export default function AgenteInvestigadorPage() {
 
   useEffect(() => {
     if (details) {
-      const firstActiveAgent = activeResearches.primary[0]?.assignmentId || 
-                             activeResearches.contributor[0]?.assignmentId || 
-                             null;
+      const firstActiveAgent =
+        activeResearches.primary[0]?.assignmentId ||
+        activeResearches.contributor[0]?.assignmentId ||
+        null;
       setSelectedAgentId(firstActiveAgent);
     }
   }, [details, activeResearches]);
@@ -239,7 +182,9 @@ export default function AgenteInvestigadorPage() {
     setIsLoading(true);
 
     try {
-      const { data } = await api.get<ResearcherDetails>(`/researchers-managements/researchers/details?email=${profile?.email}`);
+      const { data } = await api.get<ResearcherDetails>(
+        `/researchers-managements/researchers/details?email=${profile?.email}`
+      );
       setDetails(data);
     } catch (error: any) {
       if (error.response?.status === 404) {
@@ -259,50 +204,50 @@ export default function AgenteInvestigadorPage() {
 
     ws.onopen = () => {
       setIsConnected(true);
-      console.log('WebSocket conectado');
+      console.log("WebSocket conectado");
     };
 
     ws.onmessage = (event) => {
       const message: WebSocketMessage = JSON.parse(event.data);
-      setMessages(prev => [...prev, message]);
+      setMessages((prev) => [...prev, message]);
 
       switch (message.type) {
-        case 'research_start':
+        case "research_start":
           handleStartedMessage(message);
           break;
-        case 'research_progress':
+        case "research_progress":
           handleProgressMessage(message);
           break;
-        case 'writing_progress':
+        case "writing_progress":
           handleWritingProgress(message);
           break;
-        case 'compiler_progress':
+        case "compiler_progress":
           handleCompilerProgress(message);
           break;
-        case 'error':
+        case "error":
           handleError(message);
           break;
       }
     };
 
     ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      toast.error('Error en la conexión WebSocket');
+      console.error("WebSocket error:", error);
+      toast.error("Error en la conexión WebSocket");
     };
 
     ws.onclose = () => {
       setIsConnected(false);
-      console.log('WebSocket desconectado');
+      console.log("WebSocket desconectado");
     };
   };
 
   const handleStartedMessage = (message: StartedMessage) => {
     setCurrentPhase(message.message);
     setProgress(0);
-    if (message.data.status === 'started') {
+    if (message.data.status === "started") {
       setIsStartingResearch(false);
     }
-  }
+  };
 
   const handleProgressMessage = (message: ProgressMessage) => {
     setCurrentPhase(message.message);
@@ -316,15 +261,15 @@ export default function AgenteInvestigadorPage() {
 
   const handleWritingProgress = (message: WritingProgressMessage) => {
     switch (message.message) {
-      case 'section_start':
+      case "section_start":
         setCurrentPhase(`Escribiendo sección: ${message.data.section_name}`);
         break;
-      case 'content_chunk':
+      case "content_chunk":
         if (message.data.content) {
-          setMarkdown(prev => prev + message.data.content);
+          setMarkdown((prev) => prev + message.data.content);
         }
         break;
-      case 'report_complete':
+      case "report_complete":
         setProgress(100);
         break;
     }
@@ -339,7 +284,7 @@ export default function AgenteInvestigadorPage() {
     if (message.message === "final_report_chunk") {
       const { content } = message.data;
 
-      setStreamingContent(prev => {
+      setStreamingContent((prev) => {
         const newContent = prev + content;
         setTimeout(scrollToBottom, 0);
         return newContent;
@@ -373,7 +318,7 @@ export default function AgenteInvestigadorPage() {
         section_id: "test-section-1",
         title: selectedAgent?.name,
         description: selectedAgent?.description,
-        assignment_id: selectedAgentId
+        assignment_id: selectedAgentId,
       };
 
       wsRef.current.send(JSON.stringify(message));
@@ -393,7 +338,7 @@ export default function AgenteInvestigadorPage() {
     if (!details || !selectedAgentId) return null;
 
     const primaryAgent = details.primaryResearches.find(
-      r => r.assignmentId === selectedAgentId
+      (r) => r.assignmentId === selectedAgentId
     );
     if (primaryAgent) {
       return {
@@ -401,12 +346,12 @@ export default function AgenteInvestigadorPage() {
         description: primaryAgent.agentDescription,
         category: primaryAgent.agentCategory,
         industry: primaryAgent.agentIndustry,
-        type: 'primary' as const
+        type: "primary" as const,
       };
     }
 
     const contributorAgent = details.contributorsResearches.find(
-      r => r.assignmentId === selectedAgentId
+      (r) => r.assignmentId === selectedAgentId
     );
     if (contributorAgent) {
       return {
@@ -414,7 +359,7 @@ export default function AgenteInvestigadorPage() {
         description: contributorAgent.shortDescription,
         category: contributorAgent.category,
         industry: contributorAgent.industry,
-        type: 'contributor' as const
+        type: "contributor" as const,
       };
     }
 
@@ -427,7 +372,10 @@ export default function AgenteInvestigadorPage() {
     // Bloquear si:
     // 1. Hay contenido streaming y la generación no está completa
     // 2. La investigación está en progreso (progress > 0 y < 100)
-    return (!!streamingContent && !isGenerationComplete) || (progress > 0 && progress < 100);
+    return (
+      (!!streamingContent && !isGenerationComplete) ||
+      (progress > 0 && progress < 100)
+    );
   };
 
   const handleSuccessDialogClose = () => {
@@ -436,53 +384,69 @@ export default function AgenteInvestigadorPage() {
     loadResearcherDetails();
   };
 
+
+
+const handleFilesDrop = (files: File[]) => {
+  // Process dropped files
+  const processedFiles = processFiles(files);
+  
+  // Show preview dialog or directly insert markdown
+  if (processedFiles.length > 0) {
+    // Generate markdown for the files
+    let markdownContent = '';
+    processedFiles.forEach(file => {
+      markdownContent += generateMarkdown(file);
+    });
+    
+    // Insert markdown at cursor position
+    handleInsertMarkdown(markdownContent);
+    
+    
+    // Show success toast
+    toast.success(`${files.length} archivo${files.length > 1 ? 's' : ''} insertado${files.length > 1 ? 's' : ''}`);
+  }
+};
+const handleFileSelect = (files: File[]) => {
+  toast.success(`${files.length} archivo${files.length > 1 ? 's' : ''} seleccionado${files.length > 1 ? 's' : ''}`);
+};
+
+const handleInsertMarkdown = (markdownText: string) => {
+  // Insert markdown at cursor position or at the end
+  const textarea = textareaRef.current;
+  if (!textarea) return;
+
+  const newText = isGenerationComplete
+    ? insertAtCursor(streamingContent, markdownText, textarea)
+    : insertAtCursor(markdown, markdownText, textarea);
+
+  if (isGenerationComplete) {
+    setStreamingContent(newText);
+  } else {
+    setMarkdown(newText);
+  }
+};
+
+// Helper function to insert text at cursor position
+const insertAtCursor = (text: string, insertion: string, textarea: HTMLTextAreaElement): string => {
+  const startPos = textarea.selectionStart;
+  const endPos = textarea.selectionEnd;
+  
+  return text.substring(0, startPos) + insertion + text.substring(endPos, text.length);
+};
+
   if (isLoading) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center min-h-[50vh] p-4">
-        <div className="space-y-4 text-center">
-          <Loader />
-          <p className="text-muted-foreground">Cargando información...</p>
-        </div>
-      </div>
-    );
+    return <LoadingState />
   }
 
   if (!details) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 p-4">
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-bold">Aún no eres investigador</h2>
-          <p className="text-muted-foreground max-w-md">
-            Para comenzar tu investigación, primero debes registrarte como investigador.
-          </p>
-        </div>
-        <Link
-          href="/dashboard/documentation/nuevo-agente"
-          className="inline-flex items-center justify-center rounded-md bg-primary px-8 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          Comenzar a Investigar
-        </Link>
-      </div>
-    );
+    return <NotResearcherState />
   }
 
-  if (activeResearches.primary.length === 0 && activeResearches.contributor.length === 0) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 p-4">
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-bold">No tienes investigaciones activas</h2>
-          <p className="text-muted-foreground max-w-md">
-            Aquí no termina todo, puedes investigar un nuevo agente.
-          </p>
-        </div>
-        <a
-          href="/dashboard/documentation/nuevo-agente"
-          className="inline-flex items-center justify-center rounded-md bg-primary px-8 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          Investigar nuevo agente
-        </a>
-      </div>
-    );
+  if (
+    activeResearches.primary.length === 0 &&
+    activeResearches.contributor.length === 0
+  ) {
+    return <NoActiveResearchState />
   }
 
   return (
@@ -492,7 +456,7 @@ export default function AgenteInvestigadorPage() {
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-semibold">Tus agentes:</h2>
             <Select
-              value={selectedAgentId || ''}
+              value={selectedAgentId || ""}
               onValueChange={(value) => setSelectedAgentId(value)}
             >
               <SelectTrigger className="w-[250px]">
@@ -505,7 +469,10 @@ export default function AgenteInvestigadorPage() {
                       Investigaciones Primarias
                     </div>
                     {activeResearches.primary.map((research) => (
-                      <SelectItem key={research.assignmentId} value={research.assignmentId}>
+                      <SelectItem
+                        key={research.assignmentId}
+                        value={research.assignmentId}
+                      >
                         {research.agentName}
                       </SelectItem>
                     ))}
@@ -517,7 +484,10 @@ export default function AgenteInvestigadorPage() {
                       Investigaciones Contribuidor
                     </div>
                     {activeResearches.contributor.map((research) => (
-                      <SelectItem key={research.assignmentId} value={research.assignmentId}>
+                      <SelectItem
+                        key={research.assignmentId}
+                        value={research.assignmentId}
+                      >
                         {research.name}
                       </SelectItem>
                     ))}
@@ -539,9 +509,9 @@ export default function AgenteInvestigadorPage() {
             items-start
             gap-4
             md:p-6
-            ${isSidebarOpen ? 'lg:flex-col' : 'lg:flex-row'}
-            ${isSidebarOpen ? 'lg:items-start' : 'lg:items-center'}
-            ${isSidebarOpen ? 'lg:gap-4' : 'lg:gap-8'}
+            ${isSidebarOpen ? "lg:flex-col" : "lg:flex-row"}
+            ${isSidebarOpen ? "lg:items-start" : "lg:items-center"}
+            ${isSidebarOpen ? "lg:gap-4" : "lg:gap-8"}
             xl:flex-row
             xl:items-center
             xl:gap-8
@@ -550,15 +520,12 @@ export default function AgenteInvestigadorPage() {
           {/* User info */}
           <div className="flex items-center gap-2 min-w-fit">
             <div className="relative aspect-square w-16 h-16 overflow-hidden rounded-full ring-2 ring-primary/20">
-              <Image
-                src={details.avatarUrl}
-                alt={details.name}
-                fill
-                priority
-              />
+              <Image src={details.avatarUrl} alt={details.name} fill priority />
             </div>
             <div>
-              <h2 className="text-md md:text-2xl font-bold">¡Hola, {details.name}!</h2>
+              <h2 className="text-md md:text-2xl font-bold">
+                ¡Hola, {details.name}!
+              </h2>
               <p className="text-sm md:text-lg text-muted-foreground">
                 Estas documentando: {selectedAgent?.name}
               </p>
@@ -573,9 +540,10 @@ export default function AgenteInvestigadorPage() {
               flex-col
               items-start
               sm:w-auto
-              ${isSidebarOpen
-                ? 'lg:items-start lg:self-start'
-                : 'lg:items-end lg:self-end'
+              ${
+                isSidebarOpen
+                  ? "lg:items-start lg:self-start"
+                  : "lg:items-end lg:self-end"
               }
               xl:items-end
               xl:self-end
@@ -589,15 +557,18 @@ export default function AgenteInvestigadorPage() {
                 items-center
                 gap-2
                 flex-row-reverse
-                ${isSidebarOpen
-                  ? 'lg:flex-row-reverse'
-                  : 'lg:flex-row'
-                }
+                ${isSidebarOpen ? "lg:flex-row-reverse" : "lg:flex-row"}
                 xl:flex-row
               `}
             >
-              <span className="text-sm">{isConnected ? 'Conectado' : 'Desconectado'}</span>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+              <span className="text-sm">
+                {isConnected ? "Conectado" : "Desconectado"}
+              </span>
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  isConnected ? "bg-green-500" : "bg-red-500"
+                }`}
+              />
             </div>
 
             <AnimatePresence mode="wait">
@@ -613,11 +584,21 @@ export default function AgenteInvestigadorPage() {
                 <div className="flex flex-col gap-3">
                   <Button
                     onClick={handleStartResearch}
-                    disabled={!isConnected || isStartingResearch || (!!currentPhase && progress < 100)}
+                    disabled={
+                      !isConnected ||
+                      isStartingResearch ||
+                      (!!currentPhase && progress < 100)
+                    }
                     className="mt-1 w-full sm:w-auto transition-opacity duration-200 disabled:opacity-30 hover:opacity-90"
                   >
-                    <PlayCircle className={`w-4 h-4 ${isStartingResearch && 'animate-pulse'}`} />
-                    {isStartingResearch ? 'Iniciando...' : 'Investigación con Agente'}
+                    <PlayCircle
+                      className={`w-4 h-4 ${
+                        isStartingResearch && "animate-pulse"
+                      }`}
+                    />
+                    {isStartingResearch
+                      ? "Iniciando..."
+                      : "Investigación con Agente"}
                   </Button>
                   <Button
                     onClick={() => setIsModalOpen(true)}
@@ -651,7 +632,7 @@ export default function AgenteInvestigadorPage() {
           </motion.div>
         )}
       </Card>
-      
+
       {/* Editor y Preview */}
       <Tabs defaultValue="editor" className="w-full">
         <TabsList className="grid w-full grid-cols-2">
@@ -660,6 +641,17 @@ export default function AgenteInvestigadorPage() {
         </TabsList>
         <TabsContent value="editor" className="space-y-4">
           <div className="rounded-lg border bg-card">
+            {/* Add this toolbar for file uploads */}
+            <EditorToolbar 
+      onFileSelect={handleFileSelect}
+      onInsertMarkdown={handleInsertMarkdown}
+      isReadOnly={isTextareaReadOnly()}
+    />
+     {/* Add the drag and drop wrapper */}
+     <DragDropArea 
+      onFilesDrop={handleFilesDrop}
+      isDisabled={isTextareaReadOnly()}
+    >
             <Textarea
               ref={textareaRef}
               placeholder="Escribe tu investigación en markdown..."
@@ -674,22 +666,25 @@ export default function AgenteInvestigadorPage() {
               }}
               readOnly={isTextareaReadOnly()}
               style={{
-                WebkitFontSmoothing: 'antialiased',
-                MozOsxFontSmoothing: 'grayscale',
-                opacity: isTextareaReadOnly() ? '0.7' : '1',
-                cursor: isTextareaReadOnly() ? 'not-allowed' : 'text'
+                WebkitFontSmoothing: "antialiased",
+                MozOsxFontSmoothing: "grayscale",
+                opacity: isTextareaReadOnly() ? "0.7" : "1",
+                cursor: isTextareaReadOnly() ? "not-allowed" : "text",
               }}
             />
+              </DragDropArea>
           </div>
         </TabsContent>
         <TabsContent value="preview">
           <div className="rounded-lg border bg-card">
             <div className="markdown-preview p-6 min-h-[600px]">
               <ReactMarkdown
+             
                 remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw, rehypeSanitize]}
+                rehypePlugins={[rehypeRaw]}
               >
                 {streamingContent || markdown}
+               
               </ReactMarkdown>
             </div>
           </div>
@@ -702,15 +697,21 @@ export default function AgenteInvestigadorPage() {
           <CardContent className="p-4 md:p-6 flex flex-col md:flex-row md:justify-between gap-4 md:gap-10 lg:gap-16">
             <div className="basis-auto">
               <h3 className="font-semibold mb-2">Descripción</h3>
-              <p className="text-sm text-muted-foreground">{selectedAgent.description}</p>
+              <p className="text-sm text-muted-foreground">
+                {selectedAgent.description}
+              </p>
             </div>
             <div className="basis-auto">
               <h3 className="font-semibold mb-2">Categoría</h3>
-              <p className="text-sm text-muted-foreground">{selectedAgent.category}</p>
+              <p className="text-sm text-muted-foreground">
+                {selectedAgent.category}
+              </p>
             </div>
             <div className="basis-auto">
               <h3 className="font-semibold mb-2">Industria</h3>
-              <p className="text-sm text-muted-foreground">{selectedAgent.industry}</p>
+              <p className="text-sm text-muted-foreground">
+                {selectedAgent.industry}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -725,10 +726,10 @@ export default function AgenteInvestigadorPage() {
         </Alert>
       )}
 
-      <FinishDocumentationModal 
-        isOpen={isModalOpen} 
+      <FinishDocumentationModal
+        isOpen={isModalOpen}
         onOpenChange={setIsModalOpen}
-        assignmentId={selectedAgentId || ''}
+        assignmentId={selectedAgentId || ""}
         markdownContent={streamingContent || markdown}
         onSuccess={handleSuccessDialogClose}
       />
