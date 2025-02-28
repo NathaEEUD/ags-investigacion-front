@@ -23,6 +23,39 @@ interface Project {
   votesCount: number;
 }
 
+// Función para convertir la URL de YouTube con parámetro t a start
+const formatYoutubeEmbedUrl = (url: string): string => {
+  try {
+    // Si la URL ya es una URL de embed
+    if (url.includes('youtube.com/embed/')) {
+      // Verificar si tiene parámetro t
+      if (url.includes('?t=') || url.includes('&t=')) {
+        const urlObj = new URL(url);
+        const tParam = urlObj.searchParams.get('t');
+        
+        if (tParam) {
+          // Eliminar el parámetro t
+          urlObj.searchParams.delete('t');
+          
+          // Convertir el valor de t a segundos
+          let seconds = parseInt(tParam);
+          
+          // Añadir el parámetro start
+          urlObj.searchParams.append('start', seconds.toString());
+          
+          return urlObj.toString();
+        }
+      }
+      return url;
+    }
+    
+    return url;
+  } catch (error) {
+    console.error('Error formatting YouTube URL:', error);
+    return url;
+  }
+};
+
 export function ProjectList() {
   const api = useApi();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -71,9 +104,11 @@ export function ProjectList() {
 
           {project.youtubeUrl && (
             <iframe
-              src={project.youtubeUrl}
-              className="w-full"
+              src={formatYoutubeEmbedUrl(project.youtubeUrl)}
+              className="w-full h-48"
               allowFullScreen
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              title={project.title}
             />
           )}
 
