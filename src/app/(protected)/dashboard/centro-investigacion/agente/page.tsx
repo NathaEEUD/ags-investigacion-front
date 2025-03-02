@@ -27,12 +27,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { generateMarkdown, processFiles } from "@/lib/proccessingFiles";
 import { EditorToolbar } from "@/components/agent/ToolbarEditor";
 import { DragDropArea } from "@/components/agent/DragDropArea";
 import { ProgressIndicator } from "@/components/agent/ProgressIndicator";
 import { LoadingState, NoActiveResearchState, NotResearcherState } from "@/components/agent/AgentStates";
 import { ResearcherDetails } from "@/types/researcher";
+import { UploadLoadingOverlay } from "@/components/agent/UploadLoadingOverlay";
+import { useFileUploads } from "@/hooks/use-file-upload";
+import { UploadErrorState } from "@/components/agent/UploadErrorState";
 
 
 
@@ -384,55 +386,25 @@ export default function AgenteInvestigadorPage() {
     loadResearcherDetails();
   };
 
-
-
-const handleFilesDrop = (files: File[]) => {
-  // Process dropped files
-  const processedFiles = processFiles(files);
-  
-  // Show preview dialog or directly insert markdown
-  if (processedFiles.length > 0) {
-    // Generate markdown for the files
-    let markdownContent = '';
-    processedFiles.forEach(file => {
-      markdownContent += generateMarkdown(file);
-    });
-    
-    // Insert markdown at cursor position
-    handleInsertMarkdown(markdownContent);
-    
-    
-    // Show success toast
-    toast.success(`${files.length} archivo${files.length > 1 ? 's' : ''} insertado${files.length > 1 ? 's' : ''}`);
-  }
-};
-const handleFileSelect = (files: File[]) => {
-  toast.success(`${files.length} archivo${files.length > 1 ? 's' : ''} seleccionado${files.length > 1 ? 's' : ''}`);
-};
-
-const handleInsertMarkdown = (markdownText: string) => {
-  // Insert markdown at cursor position or at the end
-  const textarea = textareaRef.current;
-  if (!textarea) return;
-
-  const newText = isGenerationComplete
-    ? insertAtCursor(streamingContent, markdownText, textarea)
-    : insertAtCursor(markdown, markdownText, textarea);
-
-  if (isGenerationComplete) {
-    setStreamingContent(newText);
-  } else {
-    setMarkdown(newText);
-  }
-};
-
-// Helper function to insert text at cursor position
-const insertAtCursor = (text: string, insertion: string, textarea: HTMLTextAreaElement): string => {
-  const startPos = textarea.selectionStart;
-  const endPos = textarea.selectionEnd;
-  
-  return text.substring(0, startPos) + insertion + text.substring(endPos, text.length);
-};
+ // Use the file uploads hook
+ const {
+  isUploading,
+  uploadingFiles,
+  isUploadError,
+  uploadErrorMessage,
+  handleFilesDrop,
+  handleFileSelect,
+  handleInsertMarkdown,
+  handleRetryUpload,
+  handleDismissError
+} = useFileUploads({
+  textareaRef,
+  isGenerationComplete,
+  markdown,
+  setMarkdown,
+  streamingContent,
+  setStreamingContent
+});
 
   if (isLoading) {
     return <LoadingState />
@@ -641,6 +613,23 @@ const insertAtCursor = (text: string, insertion: string, textarea: HTMLTextAreaE
         </TabsList>
         <TabsContent value="editor" className="space-y-4">
           <div className="rounded-lg border bg-card">
+          <AnimatePresence>
+            {isUploading && (
+              <UploadLoadingOverlay 
+                isUploading={isUploading} 
+                filesCount={uploadingFiles}
+              />
+            )}
+            
+            {isUploadError && (
+              <UploadErrorState 
+                isError={isUploadError}
+                errorMessage={uploadErrorMessage}
+                onRetry={handleRetryUpload}
+                onDismiss={handleDismissError}
+              />
+            )}
+          </AnimatePresence>
             {/* Add this toolbar for file uploads */}
             <EditorToolbar 
       onFileSelect={handleFileSelect}
