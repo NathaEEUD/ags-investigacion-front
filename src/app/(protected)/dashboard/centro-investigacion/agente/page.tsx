@@ -83,40 +83,51 @@ def hello_world():
 `;
 
 // Definir tipos para los mensajes
-type StartedMessage = {
-  type: "research_start";
+interface BaseMessage {
+  type: string;
   message: string;
+}
+
+interface BaseDataMessage extends BaseMessage {
+  data: Record<string, unknown>;
+}
+
+type StartedMessage = BaseDataMessage & {
+  type: "research_start";
   data: {
     status: 'started';
   }
 }
 
-type ProgressMessage = {
+type ProgressMessage = BaseMessage & {
   type: "research_progress";
-  message: string;
-};
+}
 
-type WritingProgressMessage = {
+type WritingProgressMessage = BaseDataMessage & {
   type: "writing_progress";
-  message: string;
-};
+  message: "section_start" | "content_chunk" | "report_complete";
+  data: {
+    section_name?: string;
+    content?: string;
+  }
+}
 
-type CompilerProgressMessage = {
+type CompilerProgressMessage = BaseDataMessage & {
   type: "compiler_progress";
   message: "final_report_chunk" | "final_report_complete";
   data: {
     type: "report_content";
     content: string;
     is_complete: boolean;
-  };
-};
+  }
+}
 
-type ErrorMessage = {
+type ErrorMessage = BaseDataMessage & {
   type: "error";
   data: {
     error: string;
-  };
-};
+  }
+}
 
 // Actualizar el tipo WebSocketMessage
 type WebSocketMessage =
@@ -190,15 +201,14 @@ export default function AgenteInvestigadorPage() {
   const [details, setDetails] = useState<ResearcherDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [markdown, setMarkdown] = useState(markdownExample);
-  const [isStartingResearch, setIsStartingResearch] = useState(false);
-  const [messages, setMessages] = useState<Array<WebSocketMessage>>([]);
-  const [isConnected, setIsConnected] = useState(false);
+  const [isStartingResearch, setIsStartingResearch] = useState<boolean>(false);
+  const [isConnected, setIsConnected] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
   const [currentPhase, setCurrentPhase] = useState<string>("");
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [isGenerationComplete, setIsGenerationComplete] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string>("");
+  const [isGenerationComplete, setIsGenerationComplete] = useState<boolean>(false);
   const phases = {
     research: ["Iniciando investigación", "Recuperando datos previos", "Generando consultas", "Realizando búsqueda", "Procesando resultados"],
     writing: ["Preparando contenido", "Generando secciones", "Finalizando documento"]
@@ -241,8 +251,10 @@ export default function AgenteInvestigadorPage() {
     try {
       const { data } = await api.get<ResearcherDetails>(`/researchers-managements/researchers/details?email=${profile?.email}`);
       setDetails(data);
-    } catch (error: any) {
-      if (error.response?.status === 404) {
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error && 
+          error.response && typeof error.response === 'object' && 
+          'status' in error.response && error.response.status === 404) {
         setDetails(null);
       } else {
         toast.error("Error al cargar los detalles del investigador");
@@ -264,23 +276,22 @@ export default function AgenteInvestigadorPage() {
 
     ws.onmessage = (event) => {
       const message: WebSocketMessage = JSON.parse(event.data);
-      setMessages(prev => [...prev, message]);
-
+      
       switch (message.type) {
         case 'research_start':
-          handleStartedMessage(message);
+          handleStartedMessage(message as StartedMessage);
           break;
         case 'research_progress':
-          handleProgressMessage(message);
+          handleProgressMessage(message as ProgressMessage);
           break;
         case 'writing_progress':
-          handleWritingProgress(message);
+          handleWritingProgress(message as WritingProgressMessage);
           break;
         case 'compiler_progress':
-          handleCompilerProgress(message);
+          handleCompilerProgress(message as CompilerProgressMessage);
           break;
         case 'error':
-          handleError(message);
+          handleError(message as ErrorMessage);
           break;
       }
     };
@@ -317,7 +328,9 @@ export default function AgenteInvestigadorPage() {
   const handleWritingProgress = (message: WritingProgressMessage) => {
     switch (message.message) {
       case 'section_start':
-        setCurrentPhase(`Escribiendo sección: ${message.data.section_name}`);
+        if (message.data.section_name) {
+          setCurrentPhase(`Escribiendo sección: ${message.data.section_name}`);
+        }
         break;
       case 'content_chunk':
         if (message.data.content) {
@@ -377,7 +390,7 @@ export default function AgenteInvestigadorPage() {
       };
 
       wsRef.current.send(JSON.stringify(message));
-    } catch (error) {
+    } catch {
       toast.error("Error al iniciar la investigación");
     }
   };
