@@ -11,10 +11,19 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SendIcon, Loader2 } from "lucide-react";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useAuth } from "@/hooks/use-auth";
+import { useChat } from "@ai-sdk/react";
+import { useApi } from "@/hooks/use-api";
 import { Message } from "./types";
 import { UserMessage } from "./user-message";
 import { AgentMessage } from "./agent-message";
 import { LoadingMessage } from "./loading-message";
+import { AgentSuggestionsMessage } from "./agent-suggestions-message";
+import { useInvestigation } from "@/contexts/investigation-context";
+
+import { useEffect, useState } from "react";
+import { InvestigationProgressMessage } from "./agent-investigation-progress";
+import { Card, CardContent } from "../../card";
 
 // Hook para detectar si estamos en móvil
 function useIsMobile() {
@@ -37,146 +46,336 @@ const emptyStateVariants = {
   },
 };
 
+// Tipos para los agentes cargados de API
+type ResearchAgent = {
+  assignmentId: string;
+  name: string;
+  description: string;
+  category: string;
+  industry: string;
+  status: string;
+  agentName?: string;
+  agentDescription?: string;
+  agentCategory?: string;
+  agentIndustry?: string;
+  shortDescription?: string;
+};
+
+type ResearcherDetails = {
+  name: string;
+  email: string;
+  avatarUrl: string;
+  agentName: string;
+  agentDescription: string;
+  agentCategory: string;
+  agentIndustry: string;
+  primaryResearches: ResearchAgent[];
+  contributorsResearches: ResearchAgent[];
+};
+
 // Componente para renderizar un mensaje individual
-const MessageItem = ({ message }: { message: Message }) => {
+const MessageItem = ({
+  message,
+  onSelectAgent,
+}: {
+  message: Message;
+  onSelectAgent: (agentId: string, agentName: string) => void;
+}) => {
+  // Renderizar diferentes tipos de mensajes según su tipo
   if (message.type === "loading") {
     return <LoadingMessage message={message} />;
   }
-
   if (message.type === "user") {
     return <UserMessage message={message} />;
   }
 
+  // Procesar mensajes con invocaciones de herramientas
+  if (message.type === "agent" && message.toolInvocations) {
+    return (
+      <div className="space-y-3">
+        <AgentMessage message={{ ...message, content: message.content }} />
+        {message.toolInvocations.map((tool) => {
+          // Manejar diferentes tipos de invocaciones de herramientas
+          if (
+            tool.toolName === "startInvestigationProcess" &&
+            tool.state === "result"
+          ) {
+            return (
+              <InvestigationProgressMessage
+                key={tool.toolCallId}
+                stage={tool.result.stage}
+              />
+            );
+          }
+          if (
+            tool.toolName === "displayAgentSuggestions" &&
+            tool.state === "result"
+          ) {
+            return (
+              <AgentSuggestionsMessage
+                key={tool.toolCallId}
+                suggestions={tool.result.suggestions}
+                onSelectAgent={(agentId, agentName) => {
+                  onSelectAgent(agentId, agentName);
+                }}
+              />
+            );
+          }
+          return null;
+        })}
+      </div>
+    );
+  }
   return <AgentMessage message={message} />;
 };
 
-export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function AgentChat() {
+  // Use the investigation context
+  const {
+    selectedAgentId,
+    agentName,
+    startInvestigation,
+    isInvestigating,
+    currentPhase,
+    updateSelectedAgent,
+    messageFeedback,
+    setUserMessageFeedback,
+  } = useInvestigation();
+
+  const { profile } = useAuth();
+  const api = useApi();
   const [isConnected] = React.useState(true);
   const [isOpen, setIsOpen] = React.useState(false);
   const isMobile = useIsMobile();
-  const [messages, setMessages] = React.useState<Message[]>([]);
-  const [inputValue, setInputValue] = React.useState("");
-  const [isLoading, setIsLoading] = React.useState(false);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
+  // Estado para los agentes activos
+  const [activeResearches, setActiveResearches] = useState<{
+    primary: ResearchAgent[];
+    contributor: ResearchAgent[];
+  }>({
+    primary: [],
+    contributor: [],
+  });
 
-  // Fases de investigación predefinidas
-  const researchPhases = [
-    "Investigando...",
-    "Analizando información...",
-    "Sintetizando resultados...",
-    "Generando conclusiones...",
-  ];
-  const writingPhases = [
-    "Planificando estructura...",
-    "Redactando contenido...",
-    "Revisando coherencia...",
-    "Finalizando documento...",
-  ];
-
-  // Función para simular el progreso a través de las fases
-  const simulatePhaseProgress = (messageId: string, phases: string[]) => {
-    let currentPhase = 0;
-
-    const interval = setInterval(() => {
-      if (currentPhase < phases.length) {
-        // Usar una función de actualización para evitar cierres sobre estados antiguos
-        setMessages((prevMessages) => {
-          // Crear una copia profunda solo del mensaje que está cambiando
-          return prevMessages.map((msg) =>
-            msg.id === messageId ? { ...msg, currentPhase } : msg
-          );
+  // Cargar los detalles del investigador al inicio
+  useEffect(() => {
+    const loadResearcherDetails = async () => {
+      if (!profile?.email) return;
+      try {
+        const { data } = await api.get<ResearcherDetails>(
+          `/researchers-managements/researchers/details?email=${profile.email}`
+        );
+        // Filtrar investigaciones activas
+        setActiveResearches({
+          primary:
+            data.primaryResearches.filter((r) => r.status === "active") || [],
+          contributor:
+            data.contributorsResearches.filter((r) => r.status === "active") ||
+            [],
         });
-        currentPhase++;
-      } else {
-        clearInterval(interval);
-
-        // Cuando terminan las fases, mostrar la respuesta final
-        setTimeout(() => {
-          setMessages((prevMessages) => {
-            // Filtrar el mensaje de carga
-            const updatedMessages = prevMessages.filter(
-              (msg) => msg.id !== messageId
-            );
-
-            // Determinar qué tipo de respuesta dar basado en las fases
-            let responseContent = "";
-            if (phases === researchPhases) {
-              responseContent =
-                "He generado una investigación base sobre el tema solicitado. ¿Quieres continuar con este planteamiento o prefieres ajustarlo?";
-            } else if (phases === writingPhases) {
-              responseContent =
-                "He redactado el documento según tus indicaciones. ¿Hay algún aspecto específico que quieras que desarrolle más a fondo?";
-            }
-
-            // Añadir el nuevo mensaje de respuesta
-            return [
-              ...updatedMessages,
-              {
-                id: Date.now().toString(),
-                type: "agent",
-                content: responseContent,
-                timestamp: new Date(),
-                isNew: true,
-              },
-            ];
-          });
-
-          setIsLoading(false);
-        }, 500);
+      } catch (error) {
+        console.error("Error loading researcher details:", error);
+      } finally {
       }
-    }, 1000);
-  };
+    };
 
-  const handleSendMessage = () => {
-    if (!inputValue.trim()) return;
+    loadResearcherDetails();
+  }, [profile?.email, api]);
 
-    const userMessageId = Date.now().toString();
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: userMessageId,
-        type: "user",
-        content: inputValue,
-        timestamp: new Date(),
-        isNew: true,
+  const {
+    messages: aiMessages,
+    input,
+    setInput,
+    handleSubmit,
+    append,
+    isLoading,
+    error,
+  } = useChat({
+    id: `agent-chat-${selectedAgentId || "default"}`,
+    body: {
+      id: selectedAgentId,
+      agentName,
+      email: profile?.email ?? "",
+      activeResearches: {
+        primary: activeResearches.primary.map((r) => ({
+          id: r.assignmentId,
+          name: r.agentName || r.name,
+          description: r.agentDescription || r.shortDescription,
+          category: r.agentCategory || r.category,
+          industry: r.agentIndustry || r.industry,
+        })),
+        contributor: activeResearches.contributor.map((r) => ({
+          id: r.assignmentId,
+          name: r.name,
+          description: r.shortDescription,
+          category: r.category,
+          industry: r.industry,
+        })),
       },
-    ]);
+    },
+    initialMessages: [],
+    api: "/api/chat",
+  });
 
-    setInputValue("");
-    setIsLoading(true);
+  // Manejar la selección de agente (desde sugerencias del chat)
+  const handleSelectAgent = (agentId: string, agentName: string) => {
+    // Usar el método del contexto compartido para actualizar globalmente
+    updateSelectedAgent(agentId, agentName);
 
-    // Determinar qué conjunto de fases usar basado en los mensajes previos
-    const useWritingPhases = messages.some(
-      (msg) =>
-        msg.type === "agent" && msg.content.includes("investigación base")
-    );
-
-    // Agregar mensaje de carga con fases
-    const loadingMessageId = (Date.now() + 1).toString();
-    const phasesToUse = useWritingPhases ? writingPhases : researchPhases;
-
+    // Añadir mensaje de confirmación
     setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: loadingMessageId,
-          type: "loading",
-          content: "",
-          timestamp: new Date(),
-          phases: phasesToUse,
-          currentPhase: 0,
-          isNew: true,
-        },
-      ]);
-
-      simulatePhaseProgress(loadingMessageId, phasesToUse);
+      append({
+        role: "assistant",
+        content: `He seleccionado el agente "${agentName}". ¿Quieres iniciar la investigación ahora?`,
+      });
     }, 500);
   };
 
-  // Scroll al final de los mensajes cuando se añade uno nuevo
-  React.useEffect(() => {
+  // Convertir mensajes del formato AI SDK al formato usado por nuestros componentes
+  const convertedMessages = React.useMemo(() => {
+    return aiMessages.map((msg): Message => {
+      if (msg.role === "user") {
+        return {
+          id: msg.id,
+          type: "user",
+          content: msg.content as string,
+          timestamp: new Date(),
+          isNew: false,
+        };
+      } else {
+        return {
+          id: msg.id,
+          type: "agent",
+          content: msg.content as string,
+          timestamp: new Date(),
+          isNew: false,
+          toolInvocations: msg.toolInvocations,
+        };
+      }
+    });
+  }, [aiMessages]);
+
+  const onSubmitForm = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!input.trim()) return;
+
+    const normalizedInput = input.toLowerCase().trim();
+
+    const investigationStarters = [
+      "iniciar investigacion",
+      "iniciar investigación",
+      "quiero iniciar mi investigacion",
+      "quiero iniciar mi investigación",
+      "continuar",
+      "comenzar",
+    ];
+
+    const confirmationPhrases = [
+      "sí",
+      "si",
+      "yes",
+      "confirmo",
+      "adelante",
+      "ok",
+      "continuar",
+      "comenzar",
+      "proceder",
+    ];
+
+    const isConfirmation = confirmationPhrases.some((phrase) =>
+      normalizedInput.includes(phrase)
+    );
+
+    const isInvestigationStart = investigationStarters.some((starter) =>
+      normalizedInput.includes(starter)
+    );
+
+    if (!selectedAgentId) {
+      append({
+        role: "user",
+        content: input,
+      });
+
+      setTimeout(() => {
+        append({
+          role: "assistant",
+          content:
+            "Para iniciar una investigación, primero debes seleccionar un agente desde el panel principal.",
+        });
+      }, 500);
+
+      setInput("");
+      return;
+    }
+
+    if (isConfirmation || isInvestigationStart) {
+      append({
+        role: "user",
+        content: input,
+      });
+
+      startInvestigation()
+        .then(() => {
+          append({
+            role: "assistant",
+            content: `Iniciando investigación con ${
+              agentName || "el agente seleccionado"
+            }...`,
+          });
+        })
+        .catch((error) => {
+          console.error("Error al iniciar investigación:", error);
+          append({
+            role: "assistant",
+            content:
+              "Ha ocurrido un error al iniciar la investigación. Por favor, intenta nuevamente.",
+          });
+        });
+
+      setInput("");
+      return;
+    }
+
+    if (messageFeedback) {
+      append({
+        role: "user",
+        content: input,
+      });
+
+      setUserMessageFeedback(input);
+    }
+
+    handleSubmit(e);
+  };
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [convertedMessages]);
+
+  useEffect(() => {
+    const handleAgentChange = (event: CustomEvent) => {
+      const { agentId, agentName } = event.detail;
+
+      if (isInvestigating || isLoading) return;
+
+      if (agentId !== selectedAgentId) {
+        append({
+          role: "assistant",
+          content: `El agente de investigación ha cambiado a "${agentName}". ¿Quieres iniciar la investigación ahora?`,
+        });
+      }
+    };
+
+    window.addEventListener("agentChanged", handleAgentChange as EventListener);
+
+    return () => {
+      window.removeEventListener(
+        "agentChanged",
+        handleAgentChange as EventListener
+      );
+    };
+  }, [selectedAgentId, isInvestigating, isLoading, append]);
 
   return (
     <AnimatePresence>
@@ -198,7 +397,6 @@ export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
               ? "w-full h-[80vh] border-t rounded-t-xl bg-gradient-to-tr from-[#24264A] from-10% via-[#24264A]/70 via-40% to-background to-90%"
               : "sticky hidden lg:flex top-0 h-svh w-[500px] max-w-[500px] bg-gradient-to-br from-[#24264A]/50 from-0% to-background/40 to-30%"
           }
-          {...props}
         >
           <SidebarHeader
             className={`h-16 border-b border-[#24264A]/50 ${
@@ -206,53 +404,59 @@ export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
             }`}
             onClick={isMobile ? () => setIsOpen(!isOpen) : undefined}
           >
-            <div className="flex items-center gap-2">
-              <Image
-                src="/logo.png"
-                alt="logo"
-                width={50}
-                height={50}
-                className="rounded-full border-2 border-[#24264A]"
-              />
-              <div className="flex flex-col">
-                <h2
-                  className={
-                    isMobile ? "text-md font-semibold" : "text-lg font-semibold"
-                  }
-                >
-                  Agente Investigador
-                </h2>
-                <div className="flex items-center gap-2">
-                  <motion.div
-                    animate={{
-                      scale: [1, 1.2, 1],
-                      opacity: [0.7, 1, 0.7],
-                    }}
-                    transition={{
-                      duration: 2,
-                      repeat: Infinity,
-                      repeatType: "reverse",
-                    }}
-                    className={`w-2 h-2 rounded-full ${
-                      isConnected ? "bg-green-500" : "bg-red-500"
-                    }`}
-                  />
-                  <span
+            <div className="flex items-center gap-2 justify-between w-full px-4">
+              <div className="flex items-center gap-2">
+                <Image
+                  src="/logo.png"
+                  alt="logo"
+                  width={50}
+                  height={50}
+                  className="rounded-full border-2 border-[#24264A]"
+                />
+                <div className="flex flex-col">
+                  <h2
                     className={
                       isMobile
-                        ? "text-xs text-muted-foreground"
-                        : "text-sm text-muted-foreground"
+                        ? "text-md font-semibold"
+                        : "text-lg font-semibold"
                     }
                   >
-                    Conectado
-                  </span>
+                    Agente Investigador
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    <motion.div
+                      animate={{
+                        scale: [1, 1.2, 1],
+                        opacity: [0.7, 1, 0.7],
+                      }}
+                      transition={{
+                        duration: 2,
+                        repeat: Infinity,
+                        repeatType: "reverse",
+                      }}
+                      className={`w-2 h-2 rounded-full ${
+                        isConnected ? "bg-green-500" : "bg-red-500"
+                      }`}
+                    />
+                    <span
+                      className={
+                        isMobile
+                          ? "text-xs text-muted-foreground"
+                          : "text-sm text-muted-foreground"
+                      }
+                    >
+                      {isLoading || isInvestigating
+                        ? currentPhase || "Procesando..."
+                        : "Conectado"}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
           </SidebarHeader>
           <SidebarContent className="flex flex-col p-4 overflow-y-auto">
             <AnimatePresence mode="wait">
-              {messages.length === 0 ? (
+              {convertedMessages.length === 0 ? (
                 <motion.div
                   key="empty-state"
                   variants={emptyStateVariants}
@@ -291,38 +495,86 @@ export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.5, duration: 0.5 }}
                   >
-                    Envía un mensaje para comenzar una investigación sobre
-                    cualquier tema.
+                    {selectedAgentId
+                      ? 'Escribe "iniciar investigación" para comenzar a investigar con el agente seleccionado.'
+                      : 'Selecciona un agente desde el selector arriba, o escribe "mostrar agentes" para ver opciones disponibles.'}
                   </motion.p>
                 </motion.div>
               ) : (
                 <div className="flex flex-col space-y-4 w-full overflow-x-hidden">
-                  {messages.map((message) => (
-                    <MessageItem key={message.id} message={message} />
+                  {convertedMessages.map((message) => (
+                    <MessageItem
+                      key={message.id}
+                      message={message}
+                      onSelectAgent={handleSelectAgent}
+                    />
                   ))}
+                  {messageFeedback && (
+                    <motion.div
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="w-full"
+                    >
+                      <Card className="">
+                        <CardContent className="p-4">
+                          <div className="flex justify-between items-center">
+                            <p className="text-white">{messageFeedback}</p>
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setUserMessageFeedback("continuar");
+                                onSubmitForm(new Event("submit") as any);
+                              }}
+                              className="ml-4"
+                            >
+                              Continuar
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  )}
                   <div ref={messagesEndRef} />
+
+                  {error && (
+                    <div className="flex flex-col items-center justify-center space-y-4">
+                      <Button
+                        onClick={() => startInvestigation()}
+                        disabled={!selectedAgentId || isLoading}
+                        className="w-full max-w-md"
+                      >
+                        Iniciar Investigación con{" "}
+                        {agentName || "Agente Seleccionado"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </AnimatePresence>
           </SidebarContent>
           <SidebarFooter className="p-4 border-t border-[#24264A]/50">
-            <motion.div
+            <motion.form
               className="flex items-center gap-2 w-full"
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.2, duration: 0.4 }}
+              onSubmit={onSubmitForm}
             >
               <Input
-                placeholder="Escribe tu mensaje..."
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
+                placeholder={
+                  isLoading || isInvestigating
+                    ? "Procesando..."
+                    : "Escribe tu mensaje..."
+                }
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    handleSendMessage();
+                    onSubmitForm(e);
                   }
                 }}
-                disabled={isLoading}
+                disabled={isLoading || isInvestigating}
                 className="flex-1"
               />
               <motion.div
@@ -330,11 +582,11 @@ export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 whileTap={{ scale: 0.95 }}
               >
                 <Button
-                  onClick={handleSendMessage}
-                  disabled={isLoading || !inputValue.trim()}
+                  type="submit"
+                  disabled={isLoading || isInvestigating || !input.trim()}
                   className="relative overflow-hidden"
                 >
-                  {isLoading ? (
+                  {isLoading || isInvestigating ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <>
@@ -342,10 +594,10 @@ export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       <motion.div
                         className="absolute inset-0 bg-primary/20"
                         initial={{ x: "-100%" }}
-                        animate={{ x: inputValue.trim() ? "100%" : "-100%" }}
+                        animate={{ x: input.trim() ? "100%" : "-100%" }}
                         transition={{
                           duration: 1,
-                          repeat: inputValue.trim() ? Infinity : 0,
+                          repeat: input.trim() ? Infinity : 0,
                           repeatDelay: 0.5,
                         }}
                       />
@@ -353,7 +605,7 @@ export function AgentChat({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   )}
                 </Button>
               </motion.div>
-            </motion.div>
+            </motion.form>
           </SidebarFooter>
         </Sidebar>
       </motion.div>
