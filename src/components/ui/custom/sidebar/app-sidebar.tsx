@@ -71,6 +71,10 @@ const data: SidebarNav = {
         {
           title: "Próximos eventos",
           url: "/dashboard/documentation/eventos/",
+        },
+        {
+          title: "Proyectos",
+          url: "/dashboard/documentation/proyectos/",
         }
       ],
     }

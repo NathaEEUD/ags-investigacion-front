@@ -13,7 +13,7 @@ export default function ProtectedLayout({
       <ChallengeStatusProvider>
         {children}
       </ChallengeStatusProvider>
-      <N8nChat />
+      {/* <N8nChat /> */}
     </SessionProvider>
   );
 
